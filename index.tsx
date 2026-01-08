@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { GoogleGenAI, Type } from "@google/genai";
 import { clsx, type ClassValue } from "clsx";
@@ -20,9 +20,10 @@ interface SubtitleItem {
 interface TranslatedItem {
   id: string;
   timeRange: string;
-  speaker: string; // New field for Speaker Name
+  speaker: string;
   vietnamese: string;
   english: string;
+  chinese: string;
 }
 
 // --- Helper Functions ---
@@ -44,10 +45,9 @@ const parseSRT = (content: string): SubtitleItem[] => {
   return items;
 };
 
-const stringifySRT = (items: TranslatedItem[], lang: 'vietnamese' | 'english'): string => {
+const stringifySRT = (items: TranslatedItem[], lang: 'vietnamese' | 'english' | 'chinese'): string => {
   return items
     .map((item) => {
-      // Format: [Speaker Name] Subtitle Text
       const speakerLabel = item.speaker ? `[${item.speaker}] ` : "";
       return `${item.id}\n${item.timeRange}\n${speakerLabel}${item[lang]}`;
     })
@@ -105,7 +105,6 @@ function App() {
     setStatus("Đang đọc file...");
 
     try {
-      // 1. Read SRT Text
       const text = await srtFile.text();
       const subtitleItems = parseSRT(text);
       
@@ -113,7 +112,6 @@ function App() {
         throw new Error("File SRT lỗi hoặc trống.");
       }
 
-      // 2. Read Video (Optional based on mode)
       let videoPart: any = null;
       if (!isLiteMode && videoFile) {
         if (videoFile.size > 50 * 1024 * 1024) {
@@ -143,14 +141,12 @@ function App() {
         }
       }
 
-      // 3. Initialize AI
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const modelId = "gemini-3-flash-preview"; 
       
-      // 4. Batch Processing
       const BATCH_SIZE = 50; 
       const totalBatches = Math.ceil(subtitleItems.length / BATCH_SIZE);
-      const identifiedSpeakers = new Set<string>(); // Keep track of speakers across batches
+      const identifiedSpeakers = new Set<string>();
 
       for (let i = 0; i < subtitleItems.length; i += BATCH_SIZE) {
         const batch = subtitleItems.slice(i, i + BATCH_SIZE);
@@ -162,31 +158,19 @@ function App() {
 
         const prompt = `
           Bạn là một dịch giả phim chuyên nghiệp kiêm biên kịch.
-          
           NHIỆM VỤ:
-          1. Xác định NGƯỜI NÓI (Speaker) cho từng câu thoại.
-             - Nếu có Video: Nhìn hình/nghe giọng để đoán.
-             - Nếu Text nhắc tên: Dùng tên đó.
-             - Nếu không biết tên: Ghi "Nam 1" (Male 1), "Nữ 1" (Female 1), "Nam 2",... 
-             - Hãy cố gắng nhất quán tên nhân vật với danh sách đã tìm thấy trước đó: [${knownSpeakersList}].
-          2. Dịch phụ đề sang Tiếng Việt (tự nhiên, đời thường) và Tiếng Anh (chuẩn ngữ pháp).
+          1. Xác định NGƯỜI NÓI (Speaker).
+             - Video có: Nhìn hình/nghe giọng.
+             - Text nhắc tên: Dùng tên đó.
+             - Không biết: Ghi "Nam 1" (Male 1), "Nữ 1" (Female 1)... 
+             - Nhất quán với: [${knownSpeakersList}].
+          2. Dịch phụ đề sang Tiếng Việt (tự nhiên), Tiếng Anh và Tiếng Trung (Giản thể).
           
-          Ngữ cảnh Video:
-          ${videoPart ? "Dùng video đính kèm để xác định chính xác ai đang nói (giới tính, độ tuổi, cảm xúc)." : "Chỉ dùng text để đoán ngữ cảnh."}
-
           Input Data:
           ${JSON.stringify(batch)}
 
-          Yêu cầu Output JSON:
-          [
-            { 
-              "id": "...", 
-              "timeRange": "...", 
-              "speaker": "Tên hoặc Nam 1/Nữ 1...", 
-              "vietnamese": "...", 
-              "english": "..." 
-            }
-          ]
+          Output JSON:
+          [ { "id": "...", "timeRange": "...", "speaker": "...", "vietnamese": "...", "english": "...", "chinese": "..." } ]
         `;
 
         const parts: any[] = [];
@@ -208,8 +192,9 @@ function App() {
                   speaker: { type: Type.STRING },
                   vietnamese: { type: Type.STRING },
                   english: { type: Type.STRING },
+                  chinese: { type: Type.STRING },
                 },
-                required: ["id", "timeRange", "speaker", "vietnamese", "english"],
+                required: ["id", "timeRange", "speaker", "vietnamese", "english", "chinese"],
               },
             },
           },
@@ -217,12 +202,9 @@ function App() {
 
         if (response.text) {
           const jsonBatch = JSON.parse(response.text) as TranslatedItem[];
-          
-          // Update known speakers for next batch consistency
           jsonBatch.forEach(item => {
             if (item.speaker) identifiedSpeakers.add(item.speaker);
           });
-
           setResults((prev) => [...prev, ...jsonBatch]);
         }
 
@@ -239,7 +221,7 @@ function App() {
     }
   };
 
-  const downloadFile = (lang: 'vietnamese' | 'english') => {
+  const downloadFile = (lang: 'vietnamese' | 'english' | 'chinese') => {
     if (results.length === 0) return;
     const content = stringifySRT(results, lang);
     const blob = new Blob([content], { type: "text/srt" });
@@ -255,7 +237,6 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-gray-100 font-sans selection:bg-blue-500/30">
-      {/* Navigation Bar */}
       <nav className="border-b border-gray-800 bg-[#0a0a0a]/80 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -278,11 +259,9 @@ function App() {
       </nav>
 
       <main className="max-w-7xl mx-auto px-4 py-8">
-        
-        {/* Main Grid */}
         <div className="grid lg:grid-cols-12 gap-8">
           
-          {/* Left Column: Inputs */}
+          {/* Left Column */}
           <div className="lg:col-span-4 space-y-6">
             <div className="bg-[#111] rounded-2xl p-6 border border-gray-800 shadow-xl">
               <h2 className="text-xl font-semibold mb-4 text-gray-200 flex items-center gap-2">
@@ -290,7 +269,6 @@ function App() {
                 Tải lên File
               </h2>
               
-              {/* SRT Upload */}
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-400 mb-2">File Phụ đề gốc (.srt)</label>
                 <div className="relative group">
@@ -312,7 +290,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Video Upload */}
               <div className={cn("transition-opacity duration-300", isLiteMode ? "opacity-40 pointer-events-none grayscale" : "opacity-100")}>
                 <label className="block text-sm font-medium text-gray-400 mb-2">Video Gốc (Tùy chọn)</label>
                 <div className="relative group">
@@ -350,7 +327,6 @@ function App() {
               </button>
             </div>
 
-            {/* Status Panel */}
             <div className="bg-[#111] rounded-2xl p-6 border border-gray-800">
               <div className="flex justify-between items-center mb-2">
                 <span className="text-sm font-medium text-gray-400">Trạng thái</span>
@@ -368,33 +344,39 @@ function App() {
 
           {/* Right Column: Results */}
           <div className="lg:col-span-8 flex flex-col h-[calc(100vh-8rem)]">
-             {/* Header Actions */}
              <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-semibold text-gray-200">Kết quả Dịch thuật</h2>
                 <div className="flex gap-2">
                   <button 
                     onClick={() => downloadFile('vietnamese')}
                     disabled={results.length === 0}
-                    className="px-4 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 border border-gray-700"
+                    className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 border border-gray-700"
                   >
-                    <span className="text-red-500">▼</span> Tải Tiếng Việt
+                    <span className="text-red-500">▼</span> Tiếng Việt
                   </button>
                   <button 
                     onClick={() => downloadFile('english')}
                     disabled={results.length === 0}
-                    className="px-4 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 border border-gray-700"
+                    className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 border border-gray-700"
                   >
-                    <span className="text-blue-500">▼</span> Tải English
+                    <span className="text-blue-500">▼</span> English
+                  </button>
+                  <button 
+                    onClick={() => downloadFile('chinese')}
+                    disabled={results.length === 0}
+                    className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 border border-gray-700"
+                  >
+                    <span className="text-yellow-500">▼</span> Tiếng Trung
                   </button>
                 </div>
              </div>
 
-             {/* Table View */}
              <div className="flex-1 bg-[#111] rounded-2xl border border-gray-800 overflow-hidden relative flex flex-col shadow-inner">
                 <div className="grid grid-cols-12 bg-gray-900/50 border-b border-gray-800 p-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   <div className="col-span-2">Time/Speaker</div>
-                  <div className="col-span-5 border-l border-gray-800 pl-4">Tiếng Việt</div>
-                  <div className="col-span-5 border-l border-gray-800 pl-4">English</div>
+                  <div className="col-span-4 border-l border-gray-800 pl-2">Tiếng Việt</div>
+                  <div className="col-span-3 border-l border-gray-800 pl-2">English</div>
+                  <div className="col-span-3 border-l border-gray-800 pl-2">Tiếng Trung</div>
                 </div>
                 
                 <div className="overflow-y-auto flex-1 p-0 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
@@ -409,7 +391,6 @@ function App() {
                     <div className="divide-y divide-gray-800">
                       {results.map((item) => (
                         <div key={item.id} className="grid grid-cols-12 p-4 hover:bg-gray-800/30 transition-colors group text-sm">
-                          {/* Time & Speaker Column */}
                           <div className="col-span-2 pr-2">
                             <div className="font-mono text-yellow-600 text-[10px] mb-1 opacity-70">{item.timeRange.split(' --> ')[0]}</div>
                             <div className="inline-block bg-gray-800 text-blue-300 text-xs px-2 py-0.5 rounded border border-gray-700/50 font-medium truncate max-w-full" title={item.speaker}>
@@ -417,14 +398,16 @@ function App() {
                             </div>
                           </div>
                           
-                          {/* Vietnamese Column */}
-                          <div className="col-span-5 border-l border-gray-800/50 pl-4 text-gray-200 leading-relaxed group-hover:text-white">
+                          <div className="col-span-4 border-l border-gray-800/50 pl-2 text-gray-200 leading-relaxed group-hover:text-white font-sub text-lg tracking-wide">
                             {item.vietnamese}
                           </div>
                           
-                          {/* English Column */}
-                          <div className="col-span-5 border-l border-gray-800/50 pl-4 text-gray-400 leading-relaxed">
+                          <div className="col-span-3 border-l border-gray-800/50 pl-2 text-gray-400 leading-relaxed font-sub tracking-wide">
                             {item.english}
+                          </div>
+
+                          <div className="col-span-3 border-l border-gray-800/50 pl-2 text-gray-400 leading-relaxed font-sub tracking-wide">
+                            {item.chinese}
                           </div>
                         </div>
                       ))}
